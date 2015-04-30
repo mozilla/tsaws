@@ -129,7 +129,12 @@ def get_instance_info(region, instances):
     try:
         for i in ec2_conn.get_only_instances(instance_ids=instances):
             volumes = [v for v in ec2_conn.get_all_volumes() if v.attach_data.instance_id == i.id]
+            logger.info('Instances: id: {0} state: {1} image_id: {2} root_device: {3} tags: {4} zone: {5}'.format(i.id, i.state, i.image_id,i.root_device_type,i.tags, i.placement))
             logger.info('Instance volumes:{0}'.format(volumes))
+
+            logger.info('Instance devices/attachments:')
+            for k,v in i.block_device_mapping.iteritems():
+                logger.info('device:{0} status: {1} volume: {2} attach time:{3}'.format(k,v.status,v.volume_id, v.attach_time))
 
     except boto.exception.EC2ResponseError as e:
         # instance not found in this region, move on.
@@ -145,6 +150,16 @@ def list_volumes(region):
     volumes = [v for v in ec2_conn.get_all_volumes()]
     for v in volumes:
         logger.info('volume {0} created: {1} size: {2} state:{3} tags:{4}'.format(v.id, v.create_time, v.size, v.volume_state(), v.tags))
+
+
+def get_volume_info(region):
+    ec2_conn = boto.ec2.connect_to_region(region)
+    volumes = [v for v in ec2_conn.get_all_volumes() if v.id in options.volumes]
+    for v in volumes:
+        logger.info('volume {0} created: {1} size: {2} state:{3} tags:{4} attached?:{5}'.format(v.id, v.create_time, v.size, v.volume_state(), v.tags, v.attachment_state()))
+        if v.attachment_state() in ['attached']:
+
+            logger.info('volume attachments: {0} {1}'.format(v.attach_data.instance_id, v.attach_data.attachmentSet))
 
 
 def list_snapshots(region):
@@ -179,10 +194,10 @@ def attach_snapshot(region):
                     sleep(2)
                     i.update(True)
                 logger.info('State:{0}'.format(i.state))
-            logger.debug('Using forensic image: {0} zone:{1}'.format(i.id, i.placement))
+
             snapshots = [s for s in ec2_conn.get_all_snapshots() if s.id in options.snapshots]
             for s in snapshots:
-                logger.debug('Creating volume for  forensic image: {0} zone:{1}'.format(i.id, i.placement))
+                logger.debug('Creating volume for forensic image: {0} zone:{1}'.format(i.id, i.placement))
                 snapshot_volume = s.create_volume(i.placement)
                 while snapshot_volume.volume_state() not in ['available']:
                     sleep(2)
@@ -190,7 +205,7 @@ def attach_snapshot(region):
 
                 logger.debug(snapshot_volume)
 
-                if snapshot_volume.attach(i.id, '/dev/sdf'):
+                if snapshot_volume.attach(i.id, options.device):
                     logger.info('Attached {0} to instance {1}'.format(snapshot_volume.id, i.id))
 
 
@@ -215,6 +230,8 @@ def main():
                     snapshot_volumes(region)
                 if options.action == "list":
                     list_volumes(region)
+                if options.action == "info":
+                    get_volume_info(region)
 
             # target a specific snapshot
             if options.snapshots and len(options.snapshots) > 0:
@@ -237,7 +254,8 @@ if __name__ == '__main__':
     parser.add_option("-f", "--forensic", dest='forensic', default=None, help="instance IDs to use as the forensic workstation")
     parser.add_option("-v", "--volumes", dest='volumes', default=None, help="comma delimited list of volume IDs to target")
     parser.add_option("-s", "--snapshots", dest='snapshots', default=None, help="comma delimited list of snapshot IDs to attach to the forensic instance")
-    parser.add_option("-a", "--action", dest='action', default='list', type="choice", choices=["list", "info", "snapshot", "attach"], help="Action to perform, defaults to list")
+    parser.add_option("-d", "--device", dest="device", default="/dev/sdf", help="target device to use when attaching a volume")
+    parser.add_option("-a", "--action", dest='action', default='list', type="choice", choices=["list", "info", "snapshot", "attach"], help="Action to perform, list, info, snapshot, attach. Defaults to list")
     (options, args) = parser.parse_args()
     initConfig()
     initLogger()
